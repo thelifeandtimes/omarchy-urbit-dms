@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "urbit.dms",
+  "name": "Urbit DMs",
+  "version": "0.1.0",
+  "author": "thelifeandtimes",
+  "description": "Fast Tlon direct messages, contact search, and quick send",
+  "kinds": ["overlay", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": { "overlay": "Dms.qml", "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Urbit DMs",
+    "description": "Unread messages and the five latest direct conversations",
+    "category": "Communication",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}
