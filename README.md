@@ -1,5 +1,7 @@
 # Urbit DMs for Omarchy
 
+Development note: [independent application sessions](APPLICATION_CONNECTIONS.md) are being qualified in isolated plugin instances; the normal standalone login remains available.
+
 A small Omarchy bar widget and overlay for 1:1 direct messages on a running ship with
 Tlon's `%groups` desk. Requires Python 3, `secret-tool` with an unlocked Secret
 Service provider (GNOME Keyring on Omarchy), and `notify-send` for desktop alerts.
@@ -108,3 +110,95 @@ omarchy plugin validate .
 
 Text-only sending is intentional; media, group DMs, rich-content editing and
 push notifications while Omarchy shell is not running are not implemented.
+
+Experimental application-connection recovery also uses `busctl` to distinguish
+missing keyring items from locked or unavailable ones. Standalone login remains
+independent of Omabit. See [the connection contract](APPLICATION_CONNECTIONS.md).
+
+### Isolated profile UI check
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B tests/qml/run_profiles.py \
+  --output /tmp/omabit-dms-profile-qml-check01
+```
+
+Use a fresh output directory on each run. This requires Bubblewrap, Qt's
+`qmltestrunner` and Omarchy shell source at `/usr/share/omarchy/shell`. It copies
+QML into stable/dev/edge roots and uses real native controls with inert file,
+process and IPC adapters. The namespace has no network, host home, desktop bus or
+compositor sockets. No Python plugin helper is copied. Any QML warning fails the
+check; source and fixture hashes accompany its results. There is no host fallback.
+
+This checks profile labels, routes, late host injection and separate QML singleton
+state. It does not qualify native Wayland placement, real IPC or profile activation.
+
+### Uncertain sends and profile changes
+
+Before a DM send, the bridge saves the origin, author, recipient, exact message ID
+and private draft in `outbound-messages.json` under this instance's XDG state
+folder (directory0700/file0600). No +code, session cookie or keyring value is stored
+there. A missing HTTP/Gall reply stays uncertain; helper restart and profile
+switching do not resend it. The UI keeps a separate unresolved-send indicator
+when its ordinary busy flag clears. Opening the conversation can resolve an exact
+ID/author/time/text match from that same ship and origin. Absence from a page does
+not prove rejection. Positive acknowledgements and explicit rejections resolve
+records; unresolved entries are never discarded to make space.
+
+This journal covers DM sends. Invitation responses, read markers, graceful
+subscription cleanup and a full collection-switch coordinator are separate work;
+an empty send journal alone is not permission to unload a plugin.
+
+The bridge has an internal `shutdown-transport` command for a future collection
+coordinator. It pauses new commands, drains existing workers, deletes its exact
+channel, waits for listeners to exit and returns unresolved-send references without
+removing the session. Failed deletion retains the exact channel for retry. Its
+receipt explicitly says `collectionReady: false`: it covers transport closure,
+not all app effects or general profile activation. The QML `stopTransport()` method
+exposes this opt-in operation; ordinary close/hide behavior is unchanged.
+
+Invitation acceptance and read markers also keep private, versioned intent in
+`conversation-effects.json` before dispatch. Only an exact positive Gall receipt
+or explicit rejection resolves an entry. Unknown actions survive helper/profile
+replacement and are reported in the transport receipt without automatic replay.
+Read markers no longer clear local unread counts on HTTP success alone; a late
+receipt from an earlier connection cannot modify the current ship's display.
+Unknown formats and full unresolved history refuse new actions without discarding
+records. Authenticated refresh can confirm the desired state: an active DM confirms
+local invitation acceptance, and an explicit `unread: null` activity summary confirms
+the main stream is read. This records `state-confirmed`, not a recovered operation
+acknowledgment. Missing/malformed data, another ship/origin, or a read started before
+the intent cannot resolve it. Version1 journals are read unchanged and migrate to
+version2 on the next write; unknown future versions are preserved and refused.
+
+
+When the shell closes the bridge's input pipe, the bridge now runs the same
+transport drain used by explicit shutdown, including on a broken output pipe.
+Unconfirmed final cleanup exits nonzero; it does not silently report success.
+Private tests cover EOF and shell loss with channel deletion. The development
+bridge also keeps version1 channel ownership in `transport/channels.json`, with
+no credentials or message bodies. After verified helper death, it deletes the
+exact saved channel using its existing session before opening another. A lost
+delete reply keeps the original cleanup request and pauses new application writes;
+uncertain messages and conversation effects are never replayed. Missing/unknown
+journal data and unknown process ownership refuse intact. A competing helper
+cannot acquire the lifetime transport lock.
+
+Actual helper kills, lost deletion replies and restored subscriptions pass against
+a private synthetic HTTP peer/keyring, alongside147 unit tests. This is not yet
+actual-Urbit or installed-desktop qualification. Old helpers without this journal
+must drain before adoption; rollback to a reader that ignores it is unsupported.
+Missing/changed/expired credentials still require a recovery contract. The journal
+preserves up to1024 channel receipts and refuses new channels when full; supported
+archival is pending. Collection uncertainty remains until independently verified
+recovery; transport closure alone never sets `collectionReady`.
+
+
+Fresh actual-Urbit qualification now also passes helper kills, a lost successful
+delete reply and subscription recovery with the same saved session. It exposed
+that remote channel deletion need not wake the client's blocked event-stream read.
+The bridge therefore shuts down an owned duplicate of the exact stream socket
+before joining; late or stale readers cannot touch a replacement. All150 private
+tests and the real-Urbit final drain pass, including404 checks for both deleted
+channels. Hosted TLS/gateway behavior and independent collection-recovery approval
+remain unqualified. The preceding synthetic-peer-only limit is superseded for this
+fresh-fake transport path, not for every application mutation or production setup.

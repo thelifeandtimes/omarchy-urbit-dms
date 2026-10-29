@@ -1,14 +1,18 @@
 import QtQuick
+import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 import "." as Dm
 import "Time.js" as Time
+import "Instance.js" as Instance
 
 Ui.Panel {
   id: root
   moduleName: "urbit.dms"
+  readonly property string displayName: Instance.label(moduleName)
   manageIpc: false
   property var anchorItem: null
   property var hostWidget: null
@@ -19,7 +23,7 @@ Ui.Panel {
   property string launchFeedback: ""
   property bool launching: false
   property double clockNow: Date.now()
-  readonly property color dim: Qt.rgba(Color.popups.text.r, Color.popups.text.g, Color.popups.text.b, 0.72)
+  readonly property color dim: Qt.darker(Commons.Color.popups.text, 1.4)
 
   Timer { interval: 60000; repeat: true; running: root.opened; onTriggered: root.clockNow = Date.now() }
   Timer { id: sentTimer; interval: 2500; onTriggered: { root.feedback = ""; root.feedbackPeer = "" } }
@@ -45,7 +49,7 @@ Ui.Panel {
   }
   function toggle() { opened ? close() : open() }
   function launchInbox() {
-    Quickshell.execDetached(["omarchy-shell", "shell", "summon", "urbit.dms", '{"mode":"inbox"}'])
+    Quickshell.execDetached(["omarchy-shell", "shell", "summon", root.moduleName, '{"mode":"inbox"}'])
     close()
   }
   function submitReply(peer, message) {
@@ -76,13 +80,14 @@ Ui.Panel {
 
   Ui.KeyboardPanel {
     id: popup
+    objectName: "pluginPopup"
     anchorItem: root.anchorItem
     owner: root.hostWidget || root
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: popup.fittedContentWidth(Style.space(430))
-    contentHeight: popup.fittedContentHeight(column.implicitHeight, Style.space(650))
+    contentWidth: popup.fittedContentWidth(Style.space(440))
+    contentHeight: popup.fittedContentHeight(column.implicitHeight, Style.space(720))
 
     Ui.PanelKeyCatcher {
       id: keyCatcher
@@ -97,58 +102,52 @@ Ui.Panel {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
+        Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
 
         Column {
           id: column
+          objectName: "panelContent"
           width: parent.width
-          spacing: Style.space(10)
+          spacing: Style.space(12)
 
-          Row {
-            id: heroRow
+          Dm.PluginHeader {
+            id: hero
             width: parent.width
-            height: Math.max(hero.implicitHeight, openInbox.implicitHeight)
-            spacing: Style.space(8)
-            Ui.PanelHero {
-              id: hero
-              width: parent.width - openInbox.width - parent.spacing
-              height: parent.height
-              title: "Urbit DMs"
-              meta: Dm.State.ship ? Dm.State.ship + " · " + Dm.State.unreadTotal + " unread" : "Not signed in"
-              foreground: Color.popups.text
-              fontFamily: Style.font.family
-              iconComponent: Component { Dm.ChatMark { foreground: Color.popups.text } }
-            }
-            Ui.PanelActionButton {
-              id: openInbox
-              anchors.verticalCenter: parent.verticalCenter
-              size: Style.spacing.controlHeight
-              iconText: "↗"
-              foreground: Color.popups.text
-              tooltipText: "Open full DM panel"
-              bordered: true
-              focusable: true
-              onClicked: root.launchInbox()
+            title: root.displayName
+            meta: Dm.State.ship ? Dm.State.ship + " · " + Dm.State.unreadTotal + " unread" : "Not signed in"
+            iconComponent: Component { Dm.ChatMark { foreground: Commons.Color.popups.text } }
+            trailingControl: Component {
+              Ui.PanelActionButton {
+                objectName: "openInbox"
+                size: Style.spacing.controlHeight
+                iconText: "↗"
+                foreground: Commons.Color.popups.text
+                tooltipText: "Open full DM panel"
+                bordered: true
+                focusable: true
+                onClicked: root.launchInbox()
+              }
             }
           }
 
-          Ui.PanelSeparator { foreground: Color.popups.text }
+          Ui.PanelSeparator { foreground: Commons.Color.popups.text }
 
           RowLayout {
             visible: Dm.State.ship !== ""
             width: parent.width
-            Ui.PanelSectionHeader { Layout.fillWidth: true; text: "OPEN IN"; foreground: Color.popups.text }
-            Ui.Button { text: "Tlon Web ↗"; foreground: Color.popups.text; bordered: true; focusable: true; enabled: !root.launching; tooltipText: "Open authenticated /apps/groups in a private browser window"; onClicked: { root.launching = true; root.launchFeedback = "Opening Tlon Web…"; Dm.State.launch("open-browser") } }
-            Ui.Button { visible: Dm.State.talonAvailable; text: "Talon ↗"; foreground: Color.popups.text; bordered: true; focusable: true; enabled: !root.launching; tooltipText: "Open the installed Talon AppImage"; onClicked: { root.launching = true; root.launchFeedback = "Opening Talon…"; Dm.State.launch("launch-talon") } }
+            Ui.PanelSectionHeader { Layout.fillWidth: true; text: "OPEN IN"; foreground: Commons.Color.popups.text }
+            Ui.Button { text: "Tlon Web ↗"; foreground: Commons.Color.popups.text; bordered: true; focusable: true; enabled: !root.launching; tooltipText: "Open authenticated /apps/groups in a private browser window"; onClicked: { root.launching = true; root.launchFeedback = "Opening Tlon Web…"; Dm.State.launch("open-browser") } }
+            Ui.Button { visible: Dm.State.talonAvailable; text: "Talon ↗"; foreground: Commons.Color.popups.text; bordered: true; focusable: true; enabled: !root.launching; tooltipText: "Open the installed Talon AppImage"; onClicked: { root.launching = true; root.launchFeedback = "Opening Talon…"; Dm.State.launch("launch-talon") } }
           }
           Text { visible: root.launchFeedback !== ""; width: parent.width; text: root.launchFeedback; color: root.dim; font.family: Style.font.family; font.pixelSize: Style.font.bodySmall; wrapMode: Text.Wrap; textFormat: Text.PlainText }
-          Text { visible: Dm.State.ship !== "" && Dm.State.launcherWarning !== ""; width: parent.width; text: Dm.State.launcherWarning; color: Color.urgent; font.family: Style.font.family; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap; textFormat: Text.PlainText }
+          Text { visible: Dm.State.ship !== "" && Dm.State.launcherWarning !== ""; width: parent.width; text: Dm.State.launcherWarning; color: Commons.Color.urgent; font.family: Style.font.family; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap; textFormat: Text.PlainText }
 
-          Ui.PanelSeparator { visible: Dm.State.ship !== ""; foreground: Color.popups.text }
+          Ui.PanelSeparator { visible: Dm.State.ship !== ""; foreground: Commons.Color.popups.text }
 
           Text {
-            visible: !Dm.State.ship && Dm.State.authMessage !== ""
+            visible: !Dm.State.ship
             width: parent.width
-            text: Dm.State.authMessage
+            text: Dm.State.authMessage || "Sign in to read and reply to your ship’s messages."
             color: root.dim
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
@@ -158,7 +157,7 @@ Ui.Panel {
           Ui.Button {
             visible: !Dm.State.ship
             text: "Sign In"
-            foreground: Color.popups.text
+            foreground: Commons.Color.popups.text
             fontFamily: Style.font.family
             focusable: true
             bordered: true
@@ -168,8 +167,8 @@ Ui.Panel {
           RowLayout {
             visible: Dm.State.ship !== ""
             width: parent.width
-            Ui.PanelSectionHeader { Layout.fillWidth: true; text: "TOP CHATS"; foreground: Color.popups.text }
-            Dm.NameModeSwitch { foreground: Color.popups.text }
+            Ui.PanelSectionHeader { Layout.fillWidth: true; text: "TOP CHATS"; foreground: Commons.Color.popups.text }
+            Dm.NameModeSwitch { foreground: Commons.Color.popups.text }
           }
 
           Repeater {
@@ -186,7 +185,7 @@ Ui.Panel {
                 width: parent.width
                 height: row.implicitHeight + Style.space(10)
                 radius: Style.cornerRadius
-                color: root.replyTo === entry.recipient ? Style.selectedFillFor(Color.popups.text, Color.accent) : "transparent"
+                color: root.replyTo === entry.recipient ? Style.selectedFillFor(Commons.Color.popups.text, Commons.Color.accent) : "transparent"
                 borderSpec: Border.none()
 
                 RowLayout {
@@ -208,7 +207,7 @@ Ui.Panel {
                          shipId: entry.recipient
                          nickname: Dm.State.contacts[entry.recipient] || modelData.name || entry.recipient
                          showSecondary: root.replyTo === entry.recipient
-                         primaryColor: Color.popups.text
+                         primaryColor: Commons.Color.popups.text
                          primarySize: Style.font.subtitle
                        }
                        Text {
@@ -221,7 +220,7 @@ Ui.Panel {
                     }
                     Text {
                       text: (entry.isOwn ? "me: " : "") + String(modelData.preview || "No messages yet").replace(/\s*\n\s*/g, " ")
-                       color: entry.isOwn ? root.dim : Color.popups.text
+                       color: entry.isOwn ? root.dim : Commons.Color.popups.text
                        font.family: "sans-serif"
                       font.pixelSize: Style.font.body
                       font.italic: entry.isOwn
@@ -232,7 +231,7 @@ Ui.Panel {
                   }
                   Ui.PanelActionButton {
                     iconText: "↩"
-                    foreground: Color.popups.text
+                    foreground: Commons.Color.popups.text
                     tooltipText: "Reply to " + recipient
                     focusable: true
                     onClicked: {
@@ -257,8 +256,8 @@ Ui.Panel {
                 enabled: !root.sending
                 width: parent.width - Style.space(12)
                 anchors.horizontalCenter: parent.horizontalCenter
-                foreground: Color.popups.text
-                accent: Color.accent
+                foreground: Commons.Color.popups.text
+                accent: Commons.Color.accent
                 font.family: "sans-serif"
                 placeholderText: "Reply to " + entry.recipient + " · Enter to send"
                 onAccepted: root.submitReply(entry.recipient, text)
@@ -269,13 +268,13 @@ Ui.Panel {
                 width: parent.width - Style.space(12)
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: root.feedback
-                color: root.feedback.indexOf("failed") !== -1 || root.feedback.indexOf("rejected") !== -1 ? Color.urgent : root.dim
+                color: root.feedback.indexOf("failed") !== -1 || root.feedback.indexOf("rejected") !== -1 ? Commons.Color.urgent : root.dim
                 font.family: Style.font.family
                 font.pixelSize: Style.font.caption
                 textFormat: Text.PlainText
               }
 
-              Ui.PanelSeparator { foreground: Color.popups.text }
+              Ui.PanelSeparator { foreground: Commons.Color.popups.text }
             }
           }
 
@@ -284,7 +283,7 @@ Ui.Panel {
             width: parent.width
             text: "No conversations yet. Open the inbox to start one."
             wrapMode: Text.Wrap
-            color: Color.popups.text
+            color: Commons.Color.popups.text
             font.family: "sans-serif"
             font.pixelSize: Style.font.bodySmall
           }

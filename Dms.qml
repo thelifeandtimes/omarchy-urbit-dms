@@ -5,15 +5,21 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 import "." as Dm
 import "Search.js" as Search
 import "Time.js" as Time
+import "Instance.js" as Instance
 
 Item {
   id: root
   property var shell: null
   property var manifest: null
+  readonly property string moduleName: Instance.moduleId(manifest)
+  readonly property string instanceLabel: Instance.label(moduleName)
+  readonly property string profileSuffix: Instance.suffix(moduleName)
+  readonly property string layerNamespace: Instance.layerNamespace(moduleName)
   property bool opened: false
   property string mode: "inbox"
   property string ship: ""
@@ -23,7 +29,22 @@ Item {
   property string status: ""
   property bool statusError: false
   property bool busy: false
+  property var unresolvedOutbound: []
+  property var unresolvedEffects: []
+  property bool outboundReadable: true
+  property bool transportStopping: false
+  property var transportState: ({ closed: false })
   property bool signingIn: false
+  property bool directSignIn:false
+  readonly property string omabitTarget:"thelifeandtimes.omabit"+moduleName.slice("urbit.dms".length)+".monitor"
+  Process {
+    id:connectOmabit
+    command:["omarchy-shell",root.omabitTarget,"applications",root.moduleName]
+    stdout:SplitParser {splitMarker:"";onRead:function(data){}}
+    stderr:SplitParser {splitMarker:"";onRead:function(data){}}
+    onExited:function(code,status){omabitTimeout.stop();if(code!==0||status!==0){root.status="Omabit is unavailable. Enter direct credentials to use DMs independently.";root.statusError=true}else root.dismiss()}
+  }
+  Timer {id:omabitTimeout;interval:5000;onTriggered:if(connectOmabit.running)connectOmabit.signal(15)}
   property bool openingApp: false
   property var rows: []
   property var contacts: ({})
@@ -44,11 +65,11 @@ Item {
   property string pendingPeer: ""
   property string pendingText: ""
   readonly property string scriptPath: Qt.resolvedUrl("bridge.py").toString().replace(/^file:\/\//, "")
-  readonly property color foreground: Color.menu.text
-  readonly property color background: Color.menu.background
-  readonly property color accent: Color.accent
-  readonly property color border: Color.menu.border
-  readonly property color dim: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.72)
+  readonly property color foreground: Commons.Color.menu.text
+  readonly property color background: Commons.Color.menu.background
+  readonly property color accent: Commons.Color.accent
+  readonly property color border: Commons.Color.menu.border
+  readonly property color dim: Qt.darker(foreground, 1.4)
 
   Component.onCompleted: {
     Dm.State.sendHandler = function(to, text) { return root.send(to, text, "bar") }
@@ -61,7 +82,13 @@ Item {
     Dm.State.launchHandler = null
   }
 
+  function stopTransport() {
+    transportStopping = true
+    return command("shutdown-transport")
+  }
+
   function command(action, fields) {
+    if (transportStopping && action !== "shutdown-transport" && action !== "outbound-status") return -1
     var data = fields || ({})
     data.action = action
     data.request = ++nextRequest
@@ -85,6 +112,7 @@ Item {
       quickMatches = []
       quickCursor = -1
       if (ship) command("contacts")
+      else command("restore")
       Qt.callLater(function() { (ship ? quickRecipient : loginUrl).forceActiveFocus() })
     } else {
       command("refresh")
@@ -96,7 +124,7 @@ Item {
   function close() { opened = false }
   function dismiss() {
     opened = false
-    if (shell && typeof shell.hide === "function") shell.hide("urbit.dms")
+    if (shell && typeof shell.hide === "function") shell.hide(root.moduleName)
   }
 
   function openPeer(id) {
@@ -112,6 +140,7 @@ Item {
   }
 
   function send(to, text, quick) {
+    if (transportStopping) return false
     if (busy) return "A message is already sending"
     if (!to.trim() || !text.trim()) { status = "Enter a recipient and a message"; return status }
     var target = to.trim()
@@ -209,7 +238,14 @@ Item {
   function onLine(line) {
     var data
     try { data = JSON.parse(line) } catch (e) { return }
-    if (data.event === "login") {
+    if (!ship && ["contacts","inbox","unreads","history","sent","refreshed"].indexOf(data.event)>=0) return
+    if (data.event === "transport-state") {
+      transportState = data
+    } else if (data.event === "outbound-state") {
+      unresolvedOutbound = data.unresolved || []
+      unresolvedEffects = data.unresolvedEffects || []
+      outboundReadable = data.readable === true
+    } else if (data.event === "login") {
       ship = data.ship
       Dm.State.ship = ship
       Dm.State.authMessage = ""
@@ -224,7 +260,11 @@ Item {
       Dm.State.authMessage = ""
       Dm.State.launcherWarning = ""
       rebuildResults()
-      status = "Signed out"
+      status = data.revoked ? "Omabit connection revoked. Sign in to connect again." : "Signed out"
+      statusError=false; signingIn=false; busy=false; directSignIn=false
+      pendingSend=-1; pendingOrigin=""; pendingPeer=""; pendingText=""
+      quickTarget=""; quickMatches=[]; loadingOlder=false; olderCursor=""
+      if(data.revoked) {opened=true;mode="inbox"}
     } else if (data.event === "contacts") {
       contacts = data.contacts || ({})
       rows = rows.map(function(row) { return Object.assign({}, row, {name: root.displayName(row.ship)}) })
@@ -334,6 +374,8 @@ Item {
     }
   }
 
+  Timer { interval:2000;repeat:true;running:bridge.running && !root.transportStopping;onTriggered:root.command("check-account") }
+
   Process {
     id: bridge
     command: ["python3", "-u", root.scriptPath]
@@ -356,21 +398,22 @@ Item {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "urbit-dms"
+    WlrLayershell.namespace: root.layerNamespace
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
-    Keys.onEscapePressed: root.dismiss()
 
-    Rectangle { anchors.fill: parent; color: Color.menu.scrim }
+    Rectangle { anchors.fill: parent; color: Commons.Color.menu.scrim }
     MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
 
     Ui.BorderSurface {
       id: card
+      objectName: "connectionDialog"
+      // Key events from buttons bubble through this Item; PanelWindow is not an Item.
+      Keys.onEscapePressed: root.dismiss()
       width: Math.min(!root.ship ? Style.space(440) : (root.mode === "quick" ? Style.space(470) : Style.space(700)), window.width - Style.space(32))
       height: Math.min(!root.ship
-                       ? headerRow.implicitHeight + signInColumn.implicitHeight + Style.spacing.panelPadding * 2
-                         + Style.space(42) + (statusLabel.visible ? statusLabel.implicitHeight + Style.space(12) : 0)
+                       ? dialogContent.implicitHeight + Style.spacing.panelPadding * 2
                        : (root.mode === "quick" ? quickColumn.implicitHeight + headerRow.implicitHeight
                            + Style.spacing.panelPadding * 2 + Style.space(28)
                            + (statusLabel.visible ? statusLabel.implicitHeight + Style.space(12) : 0)
@@ -382,6 +425,7 @@ Item {
       MouseArea { anchors.fill: parent; onClicked: {} }
 
       ColumnLayout {
+        id: dialogContent
         anchors.fill: parent
         anchors.margins: Style.spacing.panelPadding
         spacing: Style.space(12)
@@ -393,11 +437,11 @@ Item {
             Layout.fillWidth: true
             Layout.minimumWidth: 0
             Layout.preferredHeight: hero.implicitHeight
-            Ui.PanelHero {
+            Dm.PluginHeader {
               id: hero
               anchors.fill: parent
-              title: !root.ship ? "Sign In" : (root.mode === "quick" ? "Quick DM" : "Urbit DMs")
-              meta: !root.ship ? "Urbit DMs" : (root.mode === "quick" ? root.ship : root.ship + " · " + Dm.State.unreadTotal + " unread")
+              title: !root.ship ? "Sign In" : (root.mode === "quick" ? "Quick DM" + root.profileSuffix : root.instanceLabel)
+              meta: !root.ship ? root.instanceLabel : (root.mode === "quick" ? root.ship : root.ship + " · " + Dm.State.unreadTotal + " unread")
               foreground: root.foreground
               fontFamily: Style.font.family
               iconComponent: Component { Dm.ChatMark { foreground: root.foreground } }
@@ -409,13 +453,33 @@ Item {
 
         Ui.PanelSeparator { Layout.fillWidth: true; foreground: root.foreground }
 
-        Text { id: statusLabel; visible: root.status !== ""; text: root.status; color: root.statusError ? Color.urgent : root.dim; wrapMode: Text.Wrap; Layout.fillWidth: true; font.family: Style.font.family; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+        Text {
+          visible: !!root.ship && (!root.outboundReadable || root.unresolvedOutbound.length > 0 || root.unresolvedEffects.length > 0)
+          text: !root.outboundReadable ? "Saved action history needs review before switching profiles." : (root.unresolvedOutbound.length + root.unresolvedEffects.length) + " action(s) still have an unknown outcome. Refresh the conversation before retrying."
+          color: Commons.Color.urgent
+          wrapMode: Text.Wrap
+          Layout.fillWidth: true
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          textFormat: Text.PlainText
+        }
+        Text { id: statusLabel; visible: root.status !== ""; text: root.status; color: root.statusError ? Commons.Color.urgent : root.dim; wrapMode: Text.Wrap; Layout.fillWidth: true; font.family: Style.font.family; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
 
         ColumnLayout {
           id: signInColumn
           visible: !root.ship
           Layout.fillWidth: true
           spacing: Style.space(8)
+          Dm.ConnectionChoices {
+            Layout.fillWidth: true
+            busy: connectOmabit.running
+            foreground: root.foreground
+            omabitAvailable: /^urbit\.dms(?:\.[a-z][a-z0-9-]{0,31})?$/.test(root.moduleName)
+            onConnectOmabit: { loginCode.text = ""; connectOmabit.running = true; omabitTimeout.restart() }
+            onDirectCredentials: { root.directSignIn = !root.directSignIn; loginCode.text = "" }
+          }
+          ColumnLayout {
+            Layout.fillWidth:true;spacing:Style.space(8);visible:root.directSignIn
           Text { text: "Ship URL"; color: root.foreground; font.family: Style.font.family; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true }
           Ui.TextField { id: loginUrl; Layout.fillWidth: true; foreground: root.foreground; accent: root.accent; placeholderText: "https://your-ship.example"; maximumLength: 2048; inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoPredictiveText; Accessible.name: "Ship URL"; onAccepted: loginCode.forceActiveFocus(); Keys.onEscapePressed: root.dismiss() }
           Text { text: "+code"; color: root.foreground; font.family: Style.font.family; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true }
@@ -446,6 +510,7 @@ Item {
             wrapMode: Text.Wrap
             Layout.fillWidth: true
             textFormat: Text.PlainText
+          }
           }
         }
 
@@ -631,7 +696,7 @@ Item {
              Ui.Button { text: "Tlon Web ↗"; foreground: root.foreground; bordered: true; focusable: true; enabled: !root.openingApp; tooltipText: "Open authenticated /apps/groups in a private browser window"; onClicked: { root.openingApp = true; root.status = "Opening Tlon Web…"; root.command("open-browser") } }
              Ui.Button { visible: Dm.State.talonAvailable; text: "Talon ↗"; foreground: root.foreground; bordered: true; focusable: true; enabled: !root.openingApp; tooltipText: "Open the installed Talon AppImage"; onClicked: { root.openingApp = true; root.status = "Opening Talon…"; root.command("launch-talon") } }
            }
-           Text { visible: Dm.State.launcherWarning !== ""; Layout.fillWidth: true; text: Dm.State.launcherWarning; color: Color.urgent; font.family: Style.font.family; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap; textFormat: Text.PlainText }
+           Text { visible: Dm.State.launcherWarning !== ""; Layout.fillWidth: true; text: Dm.State.launcherWarning; color: Commons.Color.urgent; font.family: Style.font.family; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap; textFormat: Text.PlainText }
            RowLayout {
              Layout.fillWidth: true
              Text { text: root.ship; color: root.dim; font.family: Style.font.family; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true }

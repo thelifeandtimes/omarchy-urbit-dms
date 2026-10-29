@@ -7,6 +7,7 @@ This helper stays alive until the window closes, then removes that profile.
 """
 
 import json
+from datetime import datetime
 import os
 from pathlib import Path
 import select
@@ -115,6 +116,7 @@ def launch(session):
                 "name": session["cookieName"], "value": session["cookieValue"],
                 "url": session["url"] + "/", "path": "/", "httpOnly": True,
                 "secure": urlsplit(session["url"]).scheme == "https", "sameSite": "Lax",
+                **({"expires": datetime.fromisoformat(session["expires"]).timestamp()} if "expires" in session else {}),
             }]})
             # Verify the cookie landed in the off-record context, not in the
             # browser's default profile. Never print or return its value.
