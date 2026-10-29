@@ -1,4 +1,6 @@
 import json
+import tempfile
+from outbound_journal import OutboundJournal
 import io
 import http.cookiejar
 from concurrent.futures import Future
@@ -18,7 +20,9 @@ class MemoryStore:
     def account(self):
         return {"version": 1, "url": self.session["url"], "ship": self.session["ship"]} if self.session else None
 
-    def lookup(self, url, ship):
+    def lookup(self, url, ship, check_expiry=True):
+        if self.error:
+            raise self.error
         return self.session
 
     def save(self, session):
@@ -114,6 +118,11 @@ class WireShapeTests(unittest.TestCase):
 
 
 class SendTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary=tempfile.TemporaryDirectory();self.addCleanup(self.temporary.cleanup)
+        self.state_patch=patch.dict("os.environ",{"XDG_STATE_HOME":self.temporary.name})
+        self.state_patch.start();self.addCleanup(self.state_patch.stop)
+
     def test_browser_handoff_rejects_expired_session_before_starting_browser(self):
         session = {"url": "https://ship.example", "ship": "~zod",
                    "cookieName": "urbauth-~zod", "cookieValue": "expired"}
@@ -222,6 +231,8 @@ class SendTests(unittest.TestCase):
 
         bridge.opener = FakeOpener()
         bridge.listen = lambda generation: None
+        self.addCleanup(bridge.release_transport_owner)
+        self.addCleanup(bridge.pool.shutdown, wait=True)
         self.assertEqual(bridge.login("http://localhost:8080", "+sample-code"), "~zod")
         self.assertEqual(traffic[0], ("http://localhost:8080/~/login", b"password=sample-code"))
         self.assertEqual(traffic[1][0], "http://localhost:8080/~/scry/chat/dm.json")
@@ -233,6 +244,8 @@ class SendTests(unittest.TestCase):
                    "cookieName": "urbauth-~zod", "cookieValue": "secret-cookie"}
         bridge = Bridge(session_store=MemoryStore(session))
         bridge.listen = lambda generation: None
+        self.addCleanup(bridge.release_transport_owner)
+        self.addCleanup(bridge.pool.shutdown, wait=True)
         traffic = []
         bridge.scry = lambda agent, path: traffic.append((agent, path)) or ["~bus"]
         self.assertEqual(bridge.restore(), "~zod")
@@ -240,6 +253,53 @@ class SendTests(unittest.TestCase):
         self.assertTrue(bridge.channel.startswith("urbit-dms-"))
         self.assertEqual([(c.name, c.value, c.domain, c.secure) for c in bridge.cookies],
                          [("urbauth-~zod", "secret-cookie", "ship.example", True)])
+
+    def test_running_bridge_refresh_adopts_new_account_once(self):
+        store = MemoryStore()
+        bridge = Bridge(session_store=store)
+        events, starts, refreshes, scries = [], [], [], []
+        bridge.emit = lambda event, **data: events.append((event, data))
+        bridge.start_session = lambda: starts.append(bridge.ship)
+        bridge.refresh = lambda force=False: refreshes.append(force)
+        bridge.scry = lambda agent, path: scries.append((agent, path)) or []
+        try:
+            bridge.command({"action": "restore"})
+            self.assertEqual(bridge.ship, "")
+            self.assertEqual(events, [])
+            store.save({"url": "https://ship.example", "ship": "~zod",
+                        "cookieName": "urbauth-~zod", "cookieValue": "new-approved-session"})
+            bridge.command({"action": "refresh"})
+            self.assertEqual(bridge.ship, "~zod")
+            self.assertEqual(scries, [("chat", "/dm")])
+            self.assertEqual(starts, ["~zod"])
+            self.assertEqual(events, [("login", {"ship": "~zod", "restored": True})])
+            # A revoked/replaced account clears the old client and presents login;
+            # this refresh must not silently adopt the replacement account.
+            store.save({"url": "https://other.example", "ship": "~bus",
+                        "cookieName": "urbauth-~bus", "cookieValue": "different-session"})
+            bridge.command({"action": "refresh"})
+            self.assertEqual((bridge.ship, bridge.base), ("", ""))
+            self.assertEqual(len(starts), 1)
+            self.assertEqual(refreshes, [True])
+            self.assertIn(("logout", {"revoked": True}), events)
+            self.assertNotIn("new-approved-session", str(events))
+        finally:
+            bridge.pool.shutdown(wait=True, cancel_futures=True)
+
+    def test_refresh_does_not_fall_back_when_saved_account_is_locked(self):
+        store = MemoryStore({"url": "https://ship.example", "ship": "~zod"})
+        store.error = StoreError("Unlock keyring")
+        bridge = Bridge(session_store=store)
+        events = []
+        bridge.emit = lambda event, **data: events.append((event, data))
+        bridge.scry = lambda *_args: self.fail("locked credential reached a ship")
+        try:
+            bridge.command({"action": "refresh", "request": 1})
+            self.assertEqual(bridge.ship, "")
+            self.assertEqual(events, [("error", {"request": 1, "action": "refresh", "message": "Unlock keyring"})])
+            self.assertIsNotNone(store.account())
+        finally:
+            bridge.pool.shutdown(wait=True, cancel_futures=True)
 
     def test_expired_saved_cookie_does_not_sign_in(self):
         session = {"url": "https://ship.example", "ship": "~zod",
@@ -269,7 +329,9 @@ class SendTests(unittest.TestCase):
         self.assertEqual(bridge.ship, "~zod")
 
     def test_send_poke_and_ack(self):
-        bridge = Bridge()
+        temporary = tempfile.TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        bridge = Bridge(outbound_journal=OutboundJournal(temporary.name))
+        bridge.base = "http://127.0.0.1:18081"
         bridge.ship = "~zod"
         bridge.channel = "test"
         sent = []

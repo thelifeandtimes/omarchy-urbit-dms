@@ -1,16 +1,20 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 import "." as Dm
+import "Instance.js" as Instance
 
 Ui.BarWidget {
   id: root
   moduleName: "urbit.dms"
+  readonly property string displayName: Instance.label(moduleName)
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened : false
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing : false
 
   function injectPanel() {
     if (!panelLoader.item) return
+    panelLoader.item.moduleName = root.moduleName
     panelLoader.item.bar = root.bar
     panelLoader.item.anchorItem = bubble
     panelLoader.item.hostWidget = root
@@ -22,9 +26,11 @@ Ui.BarWidget {
   implicitWidth: bubble.implicitWidth
   implicitHeight: bubble.implicitHeight
   onBarChanged: injectPanel()
+  onModuleNameChanged: injectPanel()
 
   Loader {
     id: panelLoader
+    objectName: "dmsRecentPanelLoader"
     active: true
     visible: false
     source: Qt.resolvedUrl("RecentPanel.qml")
@@ -36,7 +42,7 @@ Ui.BarWidget {
     anchors.fill: parent
     bar: root.bar
     slotSize: Style.bar.statusSlot
-    tooltipText: Dm.State.ship ? "Urbit DMs · " + Dm.State.unreadTotal + " unread" : "Urbit DMs · sign in"
+    tooltipText: root.displayName + (Dm.State.ship ? " · " + Dm.State.unreadTotal + " unread" : " · sign in")
     iconComponent: Component {
       Item {
         Canvas {
@@ -44,7 +50,7 @@ Ui.BarWidget {
           width: Style.space(15)
           height: Style.space(15)
           anchors.centerIn: parent
-          readonly property color ink: root.bar ? root.bar.barForeground : Color.foreground
+          readonly property color ink: root.bar ? root.bar.barForeground : Commons.Color.foreground
           readonly property bool showTilde: Dm.State.unreadTotal === 0
           onInkChanged: requestPaint()
           onShowTildeChanged: requestPaint()
@@ -84,7 +90,7 @@ Ui.BarWidget {
           anchors.centerIn: bubbleOutline
           anchors.verticalCenterOffset: -Style.space(1)
           text: Dm.State.unreadTotal < 10 ? String(Dm.State.unreadTotal) : "+"
-          color: root.bar ? root.bar.barForeground : Color.foreground
+          color: root.bar ? root.bar.barForeground : Commons.Color.foreground
           font.family: Style.font.family
           font.bold: Dm.State.unreadTotal > 0
           font.pixelSize: Style.font.caption
